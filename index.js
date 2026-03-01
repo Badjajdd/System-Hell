@@ -304,6 +304,28 @@ function sleep(ms) {
 }
 
 // ==============================
+//  Fetch Members with Timeout
+//  يحاول يجيب الأعضاء خلال 20 ثانية، وإذا فشل يستخدم الـ cache
+// ==============================
+async function fetchMembersWithTimeout(guild, timeoutMs = 20000) {
+  try {
+    await Promise.race([
+      guild.members.fetch(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), timeoutMs)
+      ),
+    ]);
+    console.log(`Fetched ${guild.members.cache.size} members.`);
+  } catch (err) {
+    if (err.message === 'timeout') {
+      console.warn('members.fetch() timed out, using cache as fallback.');
+    } else {
+      console.warn('members.fetch() failed:', err.message, '— using cache as fallback.');
+    }
+  }
+}
+
+// ==============================
 //  Events
 // ==============================
 client.once('clientReady', async () => {
@@ -319,6 +341,7 @@ client.on('interactionCreate', async interaction => {
   if (interaction.commandName === 'broadcast_embed') {
     try {
       await interaction.deferReply({ flags: 64 });
+      await interaction.editReply('⏳ جاري التحضير...').catch(() => {});
 
       const role       = interaction.options.getRole('role');
       const logChannel = interaction.options.getChannel('log_channel');
@@ -341,9 +364,11 @@ client.on('interactionCreate', async interaction => {
 
       const payload = { embeds: [embed], files };
 
-      await interaction.guild.members.fetch().catch(() => {});
+      await interaction.editReply('⏳ جاري تحميل قائمة الأعضاء...').catch(() => {});
+      await fetchMembersWithTimeout(interaction.guild);
       let members = interaction.guild.members.cache;
       if (role) members = members.filter(m => m.roles.cache.has(role.id));
+      await interaction.editReply(`✅ تم تحميل ${members.size} عضو. جاري الإرسال...`).catch(() => {});
 
       await sendBroadcast(interaction, members, payload, logChannel);
     } catch (err) {
@@ -358,14 +383,17 @@ client.on('interactionCreate', async interaction => {
   if (interaction.commandName === 'broadcast_text') {
     try {
       await interaction.deferReply({ flags: 64 });
+      await interaction.editReply('⏳ جاري التحضير...').catch(() => {});
 
       const message    = interaction.options.getString('message');
       const role       = interaction.options.getRole('role');
       const logChannel = interaction.options.getChannel('log_channel');
 
-      await interaction.guild.members.fetch().catch(() => {});
+      await interaction.editReply('⏳ جاري تحميل قائمة الأعضاء...').catch(() => {});
+      await fetchMembersWithTimeout(interaction.guild);
       let members = interaction.guild.members.cache;
       if (role) members = members.filter(m => m.roles.cache.has(role.id));
+      await interaction.editReply(`✅ تم تحميل ${members.size} عضو. جاري الإرسال...`).catch(() => {});
 
       await sendBroadcast(interaction, members, { content: message }, logChannel);
     } catch (err) {
