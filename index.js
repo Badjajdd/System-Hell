@@ -6,13 +6,16 @@ const {
   REST,
   Routes,
   PermissionFlagsBits,
+  AttachmentBuilder,
 } = require('discord.js');
+const https = require('https');
+const http = require('http');
 require('dotenv').config();
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,  // يحتاج تفعيل في Developer Portal
+    GatewayIntentBits.GuildMembers, // يحتاج تفعيل في Developer Portal
   ],
 });
 
@@ -20,11 +23,11 @@ const client = new Client({
 //  Config - القيم تُقرأ من ملف .env
 // ==============================
 const CONFIG = {
-  DELAY_BETWEEN_DMS:      parseInt(process.env.DELAY_BETWEEN_DMS)      || 1200,
-  BATCH_SIZE:             parseInt(process.env.BATCH_SIZE)             || 10,
-  DELAY_BETWEEN_BATCHES:  parseInt(process.env.DELAY_BETWEEN_BATCHES)  || 15000,
-  MAX_RETRIES:            parseInt(process.env.MAX_RETRIES)            || 2,
-  RETRY_DELAY:            parseInt(process.env.RETRY_DELAY)            || 5000,
+  DELAY_BETWEEN_DMS:     parseInt(process.env.DELAY_BETWEEN_DMS)     || 1200,
+  BATCH_SIZE:            parseInt(process.env.BATCH_SIZE)            || 10,
+  DELAY_BETWEEN_BATCHES: parseInt(process.env.DELAY_BETWEEN_BATCHES) || 15000,
+  MAX_RETRIES:           parseInt(process.env.MAX_RETRIES)           || 2,
+  RETRY_DELAY:           parseInt(process.env.RETRY_DELAY)           || 5000,
 };
 
 // ==============================
@@ -105,7 +108,6 @@ async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(process.env.BOT_TOKEN);
   const guildId = process.env.GUILD_ID;
 
-  // اذا حطيت GUILD_ID الاوامر تظهر فورا - بدونه تاخذ ساعة globally
   const route = guildId
     ? Routes.applicationGuildCommands(process.env.CLIENT_ID, guildId)
     : Routes.applicationCommands(process.env.CLIENT_ID);
@@ -123,7 +125,28 @@ async function registerCommands() {
 }
 
 // ==============================
-//  Build Embed
+//  Download File as Buffer
+//  يحمل الملف من Discord ويحوله Buffer حتى لا ينتهي الرابط
+// ==============================
+function downloadBuffer(url) {
+  return new Promise((resolve, reject) => {
+    const protocol = url.startsWith('https') ? https : http;
+    protocol.get(url, res => {
+      if (res.statusCode !== 200) {
+        res.resume();
+        return reject(new Error(`Failed to download: HTTP ${res.statusCode}`));
+      }
+      const chunks = [];
+      res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+      res.on('error', reject);
+    }).on('error', reject);
+  });
+}
+
+// ==============================
+//  Build Embed + Attachment
+//  يرجع { embed, files } حيث files مصفوفة AttachmentBuilder
 // ==============================
 function isValidImageUrl(url) {
   if (!url) return false;
@@ -135,7 +158,10 @@ function isValidImageUrl(url) {
   }
 }
 
-function buildEmbed({ title, description, link, linkLabel, color, thumbnail, image, attachmentUrl, footer, author, guildName }) {
+async function buildEmbedWithAttachment({
+  title, description, link, linkLabel, color,
+  thumbnail, image, imageFile, footer, author, guildName,
+}) {
   let parsedColor = 0x1DB954;
   if (color) {
     const hex = color.replace('#', '');
@@ -150,14 +176,38 @@ function buildEmbed({ title, description, link, linkLabel, color, thumbnail, ima
     .setTimestamp();
 
   if (author) embed.setAuthor({ name: author });
-  if (thumbnail && isValidImageUrl(thumbnail)) embed.setThumbnail(thumbnail);
-  if (image && isValidImageUrl(image)) embed.setImage(image);
-  else if (attachmentUrl) embed.setImage(attachmentUrl);
   if (footer) embed.setFooter({ text: footer });
   else embed.setFooter({ text: guildName });
   if (link) embed.addFields({ name: '\u200b', value: `[${linkLabel || 'اضغط هنا'}](${link})` });
 
-  return embed;
+  const files = [];
+
+  // ----- معالجة الصورة الجانبية (thumbnail) -----
+  if (thumbnail && isValidImageUrl(thumbnail)) {
+    embed.setThumbnail(thumbnail);
+  }
+
+  // ----- معالجة الصورة الرئيسية -----
+  // الأولوية: صورة مرفوعة من الجهاز > رابط image
+  if (imageFile) {
+    try {
+      // نحمل الصورة كـ Buffer فورًا قبل ما ينتهي الرابط المؤقت
+      const ext      = imageFile.name.split('.').pop().toLowerCase() || 'png';
+      const filename = `broadcast_image.${ext}`;
+      const buffer   = await downloadBuffer(imageFile.url);
+      const attachment = new AttachmentBuilder(buffer, { name: filename });
+      files.push(attachment);
+      embed.setImage(`attachment://${filename}`);
+    } catch (err) {
+      console.warn('فشل تحميل الصورة المرفوعة:', err.message);
+      // نرجع لرابط image الاحتياطي إن وُجد
+      if (image && isValidImageUrl(image)) embed.setImage(image);
+    }
+  } else if (image && isValidImageUrl(image)) {
+    embed.setImage(image);
+  }
+
+  return { embed, files };
 }
 
 // ==============================
@@ -190,9 +240,9 @@ async function sendBroadcast(interaction, members, payload, logChannel) {
   const total = memberArray.length;
 
   let successCount = 0;
-  let closedCount = 0;
-  let failedCount = 0;
-  let processed = 0;
+  let closedCount  = 0;
+  let failedCount  = 0;
+  let processed    = 0;
 
   for (let i = 0; i < memberArray.length; i += CONFIG.BATCH_SIZE) {
     const batch = memberArray.slice(i, i + CONFIG.BATCH_SIZE);
@@ -222,7 +272,6 @@ async function sendBroadcast(interaction, members, payload, logChannel) {
     }
   }
 
-  // رسالة الانتهاء النهائية
   const summary =
     `تم الارسال لجميع الاشخاص بنجاح.\n\n` +
     `المجموع: ${total}\n` +
@@ -232,17 +281,16 @@ async function sendBroadcast(interaction, members, payload, logChannel) {
 
   await interaction.editReply(summary).catch(() => {});
 
-  // ارسل تقرير للقناة اذا محددة
   if (logChannel) {
     const reportEmbed = new EmbedBuilder()
       .setTitle('تقرير الارسال')
       .setColor(0x5865F2)
       .addFields(
-        { name: 'المجموع', value: String(total), inline: true },
-        { name: 'نجح', value: String(successCount), inline: true },
-        { name: 'DM مغلق', value: String(closedCount), inline: true },
-        { name: 'فشل', value: String(failedCount), inline: true },
-        { name: 'بواسطة', value: `<@${interaction.user.id}>`, inline: true },
+        { name: 'المجموع', value: String(total),         inline: true },
+        { name: 'نجح',     value: String(successCount),  inline: true },
+        { name: 'DM مغلق', value: String(closedCount),   inline: true },
+        { name: 'فشل',     value: String(failedCount),   inline: true },
+        { name: 'بواسطة',  value: `<@${interaction.user.id}>`, inline: true },
       )
       .setTimestamp();
     await logChannel.send({ embeds: [reportEmbed] }).catch(() => {});
@@ -261,7 +309,6 @@ function sleep(ms) {
 client.once('clientReady', async () => {
   console.log(`Bot online as ${client.user.tag}`);
   client.user.setActivity(process.env.BOT_ACTIVITY || 'Podcast Bot', { type: 3 });
-  // نسجل الاوامر بعد ما البوت يكون جاهز عشان يضمن الرد خلال 3 ثواني
   await registerCommands();
 });
 
@@ -271,31 +318,34 @@ client.on('interactionCreate', async interaction => {
   // ---- /broadcast_embed ----
   if (interaction.commandName === 'broadcast_embed') {
     try {
-    await interaction.deferReply({ flags: 64 });
+      await interaction.deferReply({ flags: 64 });
 
-    const role       = interaction.options.getRole('role');
-    const logChannel = interaction.options.getChannel('log_channel');
+      const role       = interaction.options.getRole('role');
+      const logChannel = interaction.options.getChannel('log_channel');
+      const imageFile  = interaction.options.getAttachment('image_file');
 
-    const imageFile   = interaction.options.getAttachment('image_file');
-    const embed = buildEmbed({
-      title:         interaction.options.getString('title'),
-      description:   interaction.options.getString('description'),
-      link:          interaction.options.getString('link'),
-      linkLabel:     interaction.options.getString('link_label'),
-      color:         interaction.options.getString('color'),
-      thumbnail:     interaction.options.getString('thumbnail'),
-      image:         interaction.options.getString('image'),
-      attachmentUrl: imageFile ? imageFile.url : null,
-      footer:        interaction.options.getString('footer'),
-      author:        interaction.options.getString('author'),
-      guildName:     interaction.guild.name,
-    });
+      // نبني الـ embed مع تحميل الصورة كـ buffer فورًا
+      const { embed, files } = await buildEmbedWithAttachment({
+        title:       interaction.options.getString('title'),
+        description: interaction.options.getString('description'),
+        link:        interaction.options.getString('link'),
+        linkLabel:   interaction.options.getString('link_label'),
+        color:       interaction.options.getString('color'),
+        thumbnail:   interaction.options.getString('thumbnail'),
+        image:       interaction.options.getString('image'),
+        imageFile,
+        footer:      interaction.options.getString('footer'),
+        author:      interaction.options.getString('author'),
+        guildName:   interaction.guild.name,
+      });
 
-    await interaction.guild.members.fetch().catch(() => {});
-    let members = interaction.guild.members.cache;
-    if (role) members = members.filter(m => m.roles.cache.has(role.id));
+      const payload = { embeds: [embed], files };
 
-    await sendBroadcast(interaction, members, { embeds: [embed] }, logChannel);
+      await interaction.guild.members.fetch().catch(() => {});
+      let members = interaction.guild.members.cache;
+      if (role) members = members.filter(m => m.roles.cache.has(role.id));
+
+      await sendBroadcast(interaction, members, payload, logChannel);
     } catch (err) {
       console.error('broadcast_embed error:', err);
       const reply = { content: `حدث خطأ: ${err.message}`, flags: 64 };
@@ -307,17 +357,17 @@ client.on('interactionCreate', async interaction => {
   // ---- /broadcast_text ----
   if (interaction.commandName === 'broadcast_text') {
     try {
-    await interaction.deferReply({ flags: 64 });
+      await interaction.deferReply({ flags: 64 });
 
-    const message    = interaction.options.getString('message');
-    const role       = interaction.options.getRole('role');
-    const logChannel = interaction.options.getChannel('log_channel');
+      const message    = interaction.options.getString('message');
+      const role       = interaction.options.getRole('role');
+      const logChannel = interaction.options.getChannel('log_channel');
 
-    await interaction.guild.members.fetch().catch(() => {});
-    let members = interaction.guild.members.cache;
-    if (role) members = members.filter(m => m.roles.cache.has(role.id));
+      await interaction.guild.members.fetch().catch(() => {});
+      let members = interaction.guild.members.cache;
+      if (role) members = members.filter(m => m.roles.cache.has(role.id));
 
-    await sendBroadcast(interaction, members, { content: message }, logChannel);
+      await sendBroadcast(interaction, members, { content: message }, logChannel);
     } catch (err) {
       console.error('broadcast_text error:', err);
       const reply = { content: `حدث خطأ: ${err.message}`, flags: 64 };
@@ -339,14 +389,16 @@ client.on('interactionCreate', async interaction => {
 
     if (type === 'embed') {
       const imageFile = interaction.options.getAttachment('image_file');
-      const embed = buildEmbed({
-        title:         content,
-        description:   description || 'هذه رسالة تجريبية.',
+
+      const { embed, files } = await buildEmbedWithAttachment({
+        title:       content,
+        description: description || 'هذه رسالة تجريبية.',
         link,
-        attachmentUrl: imageFile ? imageFile.url : null,
-        guildName:     interaction.guild.name,
+        imageFile,
+        guildName:   interaction.guild.name,
       });
-      payload = { embeds: [embed] };
+
+      payload = { embeds: [embed], files };
     } else {
       payload = { content };
     }
@@ -366,5 +418,4 @@ client.on('interactionCreate', async interaction => {
 // ==============================
 //  Start
 // ==============================
-// نسجل الاوامر اول ثم نشغل البوت
 client.login(process.env.BOT_TOKEN);
