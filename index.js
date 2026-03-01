@@ -72,6 +72,8 @@ const commands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addStringOption(opt =>
       opt.setName('message').setDescription('نص الرسالة').setRequired(true))
+    .addAttachmentOption(opt =>
+      opt.setName('image_file').setDescription('ارفع صورة او ملف مع الرسالة (اختياري)').setRequired(false))
     .addRoleOption(opt =>
       opt.setName('role').setDescription('ارسل فقط لاصحاب هذا الرول').setRequired(false))
     .addChannelOption(opt =>
@@ -97,7 +99,7 @@ const commands = [
     .addStringOption(opt =>
       opt.setName('link').setDescription('رابط (للـ Embed فقط)').setRequired(false))
     .addAttachmentOption(opt =>
-      opt.setName('image_file').setDescription('ارفع صورة من جهازك (للـ Embed فقط)').setRequired(false))
+      opt.setName('image_file').setDescription('ارفع صورة او ملف (اختياري)').setRequired(false))
     .toJSON(),
 ];
 
@@ -386,8 +388,22 @@ client.on('interactionCreate', async interaction => {
       await interaction.editReply('⏳ جاري التحضير...').catch(() => {});
 
       const message    = interaction.options.getString('message');
+      const imageFile  = interaction.options.getAttachment('image_file');
       const role       = interaction.options.getRole('role');
       const logChannel = interaction.options.getChannel('log_channel');
+
+      // بناء الـ payload - نص + صورة اختيارية
+      const payload = { content: message, files: [] };
+      if (imageFile) {
+        try {
+          const ext        = imageFile.name.split('.').pop().toLowerCase() || 'png';
+          const filename   = `broadcast_file.${ext}`;
+          const buffer     = await downloadBuffer(imageFile.url);
+          payload.files.push(new AttachmentBuilder(buffer, { name: filename }));
+        } catch (err) {
+          console.warn('فشل تحميل الصورة:', err.message);
+        }
+      }
 
       await interaction.editReply('⏳ جاري تحميل قائمة الأعضاء...').catch(() => {});
       await fetchMembersWithTimeout(interaction.guild);
@@ -395,7 +411,7 @@ client.on('interactionCreate', async interaction => {
       if (role) members = members.filter(m => m.roles.cache.has(role.id));
       await interaction.editReply(`✅ تم تحميل ${members.size} عضو. جاري الإرسال...`).catch(() => {});
 
-      await sendBroadcast(interaction, members, { content: message }, logChannel);
+      await sendBroadcast(interaction, members, payload, logChannel);
     } catch (err) {
       console.error('broadcast_text error:', err);
       const reply = { content: `حدث خطأ: ${err.message}`, flags: 64 };
@@ -428,7 +444,18 @@ client.on('interactionCreate', async interaction => {
 
       payload = { embeds: [embed], files };
     } else {
-      payload = { content };
+      const imageFile = interaction.options.getAttachment('image_file');
+      payload = { content, files: [] };
+      if (imageFile) {
+        try {
+          const ext      = imageFile.name.split('.').pop().toLowerCase() || 'png';
+          const filename = `test_file.${ext}`;
+          const buffer   = await downloadBuffer(imageFile.url);
+          payload.files.push(new AttachmentBuilder(buffer, { name: filename }));
+        } catch (err) {
+          console.warn('فشل تحميل الصورة في test_dm:', err.message);
+        }
+      }
     }
 
     try {
