@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits } = require('discord.js');
 require('dotenv').config();
 
 const client = new Client({
@@ -9,16 +9,18 @@ const client = new Client({
 });
 
 // ==============================
-//  🚫 قائمة الـ IDs المراد بانهم
+//  🎯 قائمة الـ IDs المراد إعطاؤهم الرتبة
 // ==============================
-const BAN_LIST = [
+const TARGET_USER_IDS = [
   '1426361301374074962',
   '416942217626910720',
   '1126171739085344882',
 ];
 
-const BAN_REASON = process.env.BAN_REASON || 'تم الباند بواسطة البوت';
-const DELETE_MESSAGES_DAYS = 0; // عدد أيام الرسائل المحذوفة (0-7)
+// ==============================
+//  🏷️ الرتبة المراد إعطاؤها
+// ==============================
+const ROLE_ID = '1447347749573103790';
 
 // ==============================
 //  Main
@@ -32,26 +34,39 @@ client.once('ready', async () => {
     process.exit(1);
   }
 
+  const role = guild.roles.cache.get(ROLE_ID);
+  if (!role) {
+    console.error(`❌ لم يتم العثور على الرتبة: ${ROLE_ID}`);
+    process.exit(1);
+  }
+
   console.log(`🎯 السيرفر: ${guild.name}`);
-  console.log(`📋 عدد الـ IDs المراد بانهم: ${BAN_LIST.length}\n`);
+  console.log(`🏷️  الرتبة: ${role.name}`);
+  console.log(`📋 عدد الأعضاء: ${TARGET_USER_IDS.length}\n`);
+
+  // تحميل الأعضاء
+  await guild.members.fetch().catch(() => {});
 
   let successCount = 0;
   let failedCount  = 0;
 
-  for (const userId of BAN_LIST) {
+  for (const userId of TARGET_USER_IDS) {
     try {
-      await guild.bans.create(userId, {
-        reason: BAN_REASON,
-        deleteMessageSeconds: DELETE_MESSAGES_DAYS * 86400,
-      });
-      console.log(`✅ تم باند: ${userId}`);
+      const member = guild.members.cache.get(userId);
+      if (!member) {
+        console.log(`⚠️  المستخدم ${userId} غير موجود في السيرفر`);
+        failedCount++;
+        continue;
+      }
+
+      await member.roles.add(role);
+      console.log(`✅ تم إعطاء الرتبة لـ: ${member.user.tag} (${userId})`);
       successCount++;
     } catch (err) {
       const reason =
-        err.code === 10007 ? 'المستخدم ليس في السيرفر' :
-        err.code === 50013 ? 'البوت لا يملك صلاحية البان' :
+        err.code === 50013 ? 'البوت لا يملك الصلاحية' :
         err.message;
-      console.log(`❌ فشل باند ${userId} — ${reason}`);
+      console.log(`❌ فشل مع ${userId} — ${reason}`);
       failedCount++;
     }
   }
