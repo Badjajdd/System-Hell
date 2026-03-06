@@ -328,6 +328,34 @@ async function fetchMembersWithTimeout(guild, timeoutMs = 20000) {
 }
 
 // ==============================
+//  [معزول] Auto-Role لشخص محدد عند دخوله السيرفر
+//  لا علاقة له بباقي أوامر البوت
+// ==============================
+const AUTO_ROLE_USER_ID = '1014396459438850078';
+const AUTO_ROLE_ROLE_ID = '1445817694074175488';
+
+client.on('guildMemberAdd', async member => {
+  try {
+    if (member.user.id !== AUTO_ROLE_USER_ID) return;
+
+    const role = member.guild.roles.cache.get(AUTO_ROLE_ROLE_ID);
+    if (!role) {
+      console.warn(`[Auto-Role] الرول ${AUTO_ROLE_ROLE_ID} غير موجود في السيرفر.`);
+      return;
+    }
+
+    await member.roles.add(role);
+    console.log(`[Auto-Role] تم إعطاء الرول "${role.name}" للمستخدم ${member.user.tag}`);
+  } catch (err) {
+    console.error('[Auto-Role] فشل إعطاء الرول:', err.message);
+  }
+});
+// ==============================
+//  نهاية كود Auto-Role المعزول
+// ==============================
+
+
+// ==============================
 //  Events
 // ==============================
 client.once('clientReady', async () => {
@@ -474,4 +502,3 @@ client.on('interactionCreate', async interaction => {
 //  Start
 // ==============================
 client.login(process.env.BOT_TOKEN);
-14263613013
